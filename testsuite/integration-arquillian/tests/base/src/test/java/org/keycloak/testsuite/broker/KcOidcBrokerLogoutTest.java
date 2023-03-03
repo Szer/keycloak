@@ -4,21 +4,23 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.keycloak.OAuth2Constants;
+import org.keycloak.TokenVerifier;
 import org.keycloak.admin.client.resource.RealmResource;
+import org.keycloak.common.VerificationException;
+import org.keycloak.models.IdentityProviderSyncMode;
+import org.keycloak.representations.IDToken;
 import org.keycloak.representations.idm.UserRepresentation;
 import org.keycloak.services.managers.AuthenticationManager;
 import org.keycloak.services.util.CookieHelper;
 import org.keycloak.testsuite.AssertEvents;
 import org.keycloak.testsuite.util.OAuthClient;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.keycloak.testsuite.admin.ApiUtil.createUserWithAdminClient;
 import static org.keycloak.testsuite.admin.ApiUtil.resetUserPassword;
-import static org.keycloak.testsuite.broker.BrokerTestConstants.REALM_CONS_NAME;
-import static org.keycloak.testsuite.broker.BrokerTestConstants.REALM_PROV_NAME;
-import static org.keycloak.testsuite.broker.BrokerTestTools.waitForPage;
-import static org.keycloak.testsuite.broker.BrokerTestTools.getConsumerRoot;
-import static org.keycloak.testsuite.broker.BrokerTestTools.getProviderRoot;
+import static org.keycloak.testsuite.broker.BrokerTestConstants.*;
+import static org.keycloak.testsuite.broker.BrokerTestTools.*;
 
 public class KcOidcBrokerLogoutTest extends AbstractBaseBrokerTest {
 
@@ -27,7 +29,16 @@ public class KcOidcBrokerLogoutTest extends AbstractBaseBrokerTest {
 
     @Override
     protected BrokerConfiguration getBrokerConfiguration() {
-        return KcOidcBrokerConfiguration.INSTANCE;
+        return new KcOidcBrokerConfigurationWithoutBackchannel();
+    }
+
+    private class KcOidcBrokerConfigurationWithoutBackchannel extends KcOidcBrokerConfiguration {
+
+        @Override
+        protected void applyDefaultConfiguration(Map<String, String> config, IdentityProviderSyncMode syncMode) {
+            super.applyDefaultConfiguration(config, syncMode);
+            config.put("backchannelSupported", "false");
+        }
     }
 
     @Before
@@ -116,5 +127,41 @@ public class KcOidcBrokerLogoutTest extends AbstractBaseBrokerTest {
         driver.navigate().to(getAccountUrl(getProviderRoot(), REALM_PROV_NAME));
 
         waitForPage(driver, "sign in to provider", true);
+    }
+
+    @Test
+    public void logoutWithExpiredIdTokenSendsIdTokenHintToIdp() throws VerificationException {
+        driver.navigate().to(getLoginUrl(getConsumerRoot(), bc.consumerRealmName(), "broker-app"));
+        logInWithBroker(bc);
+        updateAccountInformation();
+
+        // Exchange code from "broker-app" client of "consumer" realm for the tokens
+        String code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
+        OAuthClient.AccessTokenResponse response = oauth.realm(bc.consumerRealmName())
+                .clientId("broker-app")
+                .redirectUri(getConsumerRoot() + "/auth/realms/" + REALM_CONS_NAME + "/app")
+                .doAccessTokenRequest(code, "broker-app-secret");
+        assertEquals(200, response.getStatusCode());
+
+        String idTokenString = response.getIdToken();
+        IDToken idToken = TokenVerifier.create(idTokenString, IDToken.class).getToken();
+        int expiresInMs = (int) (idToken.getExp() - idToken.getIat());
+
+        // simulate token expiration
+        setTimeOffset(expiresInMs * 2);
+
+        // logout with passing id_token_hint
+        logoutFromRealm(
+                getConsumerRoot(),
+                bc.consumerRealmName(),
+                "something-else",
+                idTokenString,
+                "broker-app",
+                getConsumerRoot() + "/auth/realms/" + REALM_CONS_NAME + "/app"
+        );
+
+        // what to assert here???
+        // Selenium is unreliable to catch 302 redirect
+        waitForPage(driver, "sign in to to", true);
     }
 }
