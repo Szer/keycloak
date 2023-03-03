@@ -12,6 +12,7 @@ import org.keycloak.representations.IDToken;
 import org.keycloak.representations.idm.UserRepresentation;
 import org.keycloak.services.managers.AuthenticationManager;
 import org.keycloak.services.util.CookieHelper;
+import org.keycloak.testsuite.Assert;
 import org.keycloak.testsuite.AssertEvents;
 import org.keycloak.testsuite.util.OAuthClient;
 import java.util.Map;
@@ -22,52 +23,14 @@ import static org.keycloak.testsuite.admin.ApiUtil.resetUserPassword;
 import static org.keycloak.testsuite.broker.BrokerTestConstants.*;
 import static org.keycloak.testsuite.broker.BrokerTestTools.*;
 
-public class KcOidcBrokerLogoutTest extends AbstractBaseBrokerTest {
+public class KcOidcBrokerLogoutTest extends AbstractBrokerLogoutTest {
 
     @Rule
     public AssertEvents events = new AssertEvents(this);
 
     @Override
     protected BrokerConfiguration getBrokerConfiguration() {
-        return new KcOidcBrokerConfigurationWithoutBackchannel();
-    }
-
-    private class KcOidcBrokerConfigurationWithoutBackchannel extends KcOidcBrokerConfiguration {
-
-        @Override
-        protected void applyDefaultConfiguration(Map<String, String> config, IdentityProviderSyncMode syncMode) {
-            super.applyDefaultConfiguration(config, syncMode);
-            config.put("backchannelSupported", "false");
-        }
-    }
-
-    @Before
-    public void createUser() {
-        log.debug("creating user for realm " + bc.providerRealmName());
-
-        final UserRepresentation user = new UserRepresentation();
-        user.setUsername(bc.getUserLogin());
-        user.setEmail(bc.getUserEmail());
-        user.setEmailVerified(true);
-        user.setEnabled(true);
-
-        final RealmResource realmResource = adminClient.realm(bc.providerRealmName());
-        final String userId = createUserWithAdminClient(realmResource, user);
-
-        resetUserPassword(realmResource.users().get(userId), bc.getUserPassword(), false);
-    }
-
-    @Before
-    public void addIdentityProviderToProviderRealm() {
-        log.debug("adding identity provider to realm " + bc.consumerRealmName());
-
-        final RealmResource realm = adminClient.realm(bc.consumerRealmName());
-        realm.identityProviders().create(bc.setUpIdentityProvider()).close();
-    }
-
-    @Before
-    public void addClients() {
-        addClientsToProviderAndConsumer();
+        return KcOidcBrokerConfiguration.INSTANCE;
     }
 
     @Test
@@ -160,8 +123,8 @@ public class KcOidcBrokerLogoutTest extends AbstractBaseBrokerTest {
                 getConsumerRoot() + "/auth/realms/" + REALM_CONS_NAME + "/app"
         );
 
-        // what to assert here???
-        // Selenium is unreliable to catch 302 redirect
-        waitForPage(driver, "sign in to to", true);
+        // user should be logged out successfully from the IDP even though the id_token_hint is expired
+        driver.navigate().to(getAccountUrl(getProviderRoot(), REALM_PROV_NAME));
+        waitForPage(driver, "sign in to provider", true);
     }
 }
